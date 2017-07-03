@@ -3,31 +3,39 @@ package pool
 import (
 	"errors"
 	"fmt"
+	"google.golang.org/grpc"
 	"sync"
 	"time"
 )
 
-//PoolConfig 连接池相关配置
+//GRPC PoolConfig 连接池相关配置
 type PoolConfig struct {
 	//连接池中拥有的最小连接数
 	InitialCap int
 	//连接池中拥有的最大的连接数
 	MaxCap int
 	//生成连接的方法
-	Factory func() (interface{}, error)
+	Factory func(endpoint string, options []grpc.DialOption) (interface{}, error)
 	//关闭链接的方法
 	Close func(interface{}) error
 	//链接最大空闲时间，超过该事件则将失效
 	IdleTimeout time.Duration
+
+	//endpoint target link
+	EndPoint string
+	// grpc.client dial options grnerally is tls options
+	Options []grpc.DialOption
 }
 
 //channelPool 存放链接信息
 type channelPool struct {
 	mu          sync.Mutex
 	conns       chan *idleConn
-	factory     func() (interface{}, error)
+	factory     func(endpoint string, options []grpc.DialOption) (interface{}, error)
 	close       func(interface{}) error
 	idleTimeout time.Duration
+	endpoint    string
+	options     []grpc.DialOption
 }
 
 type idleConn struct {
@@ -46,10 +54,12 @@ func NewChannelPool(poolConfig *PoolConfig) (Pool, error) {
 		factory:     poolConfig.Factory,
 		close:       poolConfig.Close,
 		idleTimeout: poolConfig.IdleTimeout,
+		endpoint:    poolConfig.EndPoint,
+		options:     poolConfig.Options,
 	}
 
 	for i := 0; i < poolConfig.InitialCap; i++ {
-		conn, err := c.factory()
+		conn, err := c.factory(c.endpoint, c.options)
 		if err != nil {
 			c.Release()
 			return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
@@ -90,7 +100,7 @@ func (c *channelPool) Get() (interface{}, error) {
 			}
 			return wrapConn.conn, nil
 		default:
-			conn, err := c.factory()
+			conn, err := c.factory(c.endpoint, c.options)
 			if err != nil {
 				return nil, err
 			}
